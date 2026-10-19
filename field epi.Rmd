@@ -1,0 +1,275 @@
+---
+title: "Analysis code for the Description of the VPD outbreak in province X "
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+date: "2026-10-18"
+---
+#Title :  Analysisis of line list and coverage DATASETS: 'Coverage_data_EN’ and ‘Case_data_EN
+
+# Date ; 18/09/2026
+
+# Made by: Evrard Melvin Kepgang Nanseu
+
+# Output : analysis of the epidemiological situation (Person, Tine , Place ) in relation with coverage
+
+#Purpose :  This script is the script used to analyse the datasets ‘Coverage_data_EN’ and ‘Case_data_EN'
+#           This is done in view of presenting the SITREP of outbreak and vaccine coverege in Province X.
+
+
+# This script will be an automated script which at a moment will need the import(selection) of the data set,
+# as the data may increase over time. The packages needed for this script to run will be added as well and #the output can be obtained directly and the graphs will be saves automatically.
+
+```{r}
+#Loading packages
+install.packages("pacman")
+pacman::p_load(openxlsx2, lubridate, readxl, ggplot2, tidyverse, scales)
+library(dplyr)
+#importing the data set
+case <- read_excel("Kepgang Nanseu, Evrard Melvin - Workbook.xlsx", sheet = "DATA_CASE")
+coverage <- read_excel("Kepgang Nanseu, Evrard Melvin - Workbook.xlsx", sheet = "DATA_COVERAGE")
+
+```
+
+```{r}
+
+# Descriptive statistics counts and proportions
+case %>% dplyr::count(year) # Cases from 2021 -2026
+outbreak <- case %>% filter(year=="2026")   # number of cases in 2026
+outbreak %>% count(sex)%>%
+  mutate(prop = n / sum(n))
+outbreak %>% count(age_group)%>%
+  mutate(prop = n / sum(n))
+outbreak %>% count(region)%>%
+  mutate(prop = n / sum(n))
+outbreak %>% count(exposure_setting)%>%
+  mutate(prop = n / sum(n))
+outbreak %>% count(acquisition)
+
+case %>% count(sex)
+case %>% count(age_group)
+case %>% count(region)
+
+outbreak %>%
+  count(age_group, sex)
+
+case %>% filter(year!="2026") %>% count(acquisition)
+
+ 
+```
+
+
+```{r}
+# confirming the outbreak
+# 1. Cases per year
+cases_year <- case %>% count(year, name = "cases")
+cases_year
+
+# 2. Baseline: average number of cases per year in 2021-2025
+baseline_mean <- cases_year %>%
+  filter(year != "2026") %>%
+  summarise(mean = mean(cases)) %>%
+  pull(mean)
+
+# 3. How many times higher is 2026?
+cases_2026 <- cases_year %>% filter(year == "2026") %>% pull(cases)
+ratio <- round(cases_2026 / baseline_mean, 1)
+ratio
+```
+
+#Epi curve
+```{r}
+# Highlighting the informations in 2026
+
+plot <- ggplot(outbreak, aes(x = as.Date(report_date), fill = acquisition)) +
+  geom_bar(width = 1) +
+  scale_x_date(breaks = sort(unique(as.Date(outbreak$report_date))), date_labels = "%d %b") +
+  labs(x = "Date of report", y = "Number of cases", title = "Number of cases by date of report and source of infection",
+     subtitle = "Province X, 1 January - 30 June 2026 (n = 63)", size = 6) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 11), 
+        plot.title    = element_text(size = 22, face = "bold"),
+        plot.subtitle = element_text(size = 16),
+        legend.text   = element_text(size = 14))
+plot
+
+ggsave("epicurve_2026.png", plot, width = 24, height = 8, dpi = 150, bg = "white")
+
+#Highlighting the situation since 2021
+case <- case %>%
+     mutate(week = floor_date(report_date, "week", week_start = 7))
+plot1 <- ggplot(case, aes(x = week, fill = acquisition)) +
+  geom_bar() +  scale_x_date(date_breaks = "1 year", date_labels = "%Y")+
+  labs(x = "Period", y = "Number of cases", title = "Number of cases by date of report and source of infection",
+     subtitle = "Province X, 2021 - 30 June 2026 (n = 77)") +
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 11), 
+        plot.title    = element_text(size = 22, face = "bold"),
+        plot.subtitle = element_text(size = 16))
+plot1
+ggsave("epicurve_2021_2026.png", plot1, width = 26, height = 8, dpi = 150, bg = "white")
+
+
+```
+
+
+# Checking the link with vaccination coverage at the group level
+
+```{r}
+# Grouping data per region to allow merging and computation per region
+cases_region <- outbreak %>% count(region, name = "cases")
+
+pop_region <- coverage %>%
+  group_by(region) %>%
+  summarise(population = sum(population_2025),
+            vaccinated = sum(n_vaccinated))
+
+region_table <- pop_region %>%
+  left_join(cases_region, by = "region") %>%
+  mutate(cases = replace_na(cases, 0))
+
+#  Province (one row)
+Province <- region_table %>%
+  summarise(region = "Province", cases = sum(cases),
+            population = sum(population), vaccinated = sum(vaccinated))
+
+# Regions + Province in one table, then the measures
+region_calc <- region_table %>%
+  bind_rows(Province) %>%
+  mutate(attack_rate  = round(cases / population * 100000, 1),
+         coverage     = round(vaccinated / population * 100, 1),
+         unvaccinated = population - vaccinated,
+         pct_cases    = round(cases / Province$cases * 100, 1),
+         region       = factor(region, levels = region))      
+
+region_calc
+
+# Plot: regions in blue, province in red
+plot2 <- ggplot(region_calc, aes(x = region, y = attack_rate, fill = region == "Province")) +
+  geom_col(width = 0.5) +
+  geom_text(aes(label = paste0(attack_rate, " (cov. ", coverage, "%)")),
+            vjust = -0.5, size = 6) +
+  scale_fill_manual(values = c("FALSE" = "steelblue", "TRUE" = "red"), guide = "none") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(title = "Attack rate (per 100,000) and vaccine coverage by region, Province X, 1 January – 30 June 2026", 
+       x = "Region", y = "Attack rate per 100,000") +
+  theme_minimal(base_size = 13)
+
+plot2
+
+ggsave("Attack rate_region.png", plot2, width = 10, height = 8, dpi = 150, bg = "white")
+
+
+
+```
+
+
+
+
+# Checking the link with vaccination covergae per age group
+
+```{r}
+ cases_age <- outbreak %>% count(age_group, name = "cases")
+
+pop_age <- coverage %>%
+  group_by(age_group) %>%
+  summarise(population = sum(population_2025),
+            vaccinated = sum(n_vaccinated))
+
+age_table <- pop_age %>%
+  left_join(cases_age, by = "age_group") %>%
+  mutate(cases = replace_na(cases, 0))
+
+# Province (one row)
+Province_age <- age_table %>%
+  summarise(age_group = "Province", cases = sum(cases),
+            population = sum(population), vaccinated = sum(vaccinated))
+
+# Age groups + Province in one table, then the measures
+age_calc <- age_table %>%
+  bind_rows(Province_age) %>%
+  mutate(attack_rate  = round(cases / population * 100000, 1),
+         coverage     = round(vaccinated / population * 100, 1),
+         unvaccinated = population - vaccinated,
+         pct_cases    = round(cases / Province_age$cases * 100, 1),
+         age_group    = factor(age_group, levels = age_group))      
+
+age_calc
+
+# Plot: age groups in blue, Province in red
+plot3 <- ggplot(age_calc, aes(x = age_group, y = attack_rate, fill = age_group == "Province")) +
+  geom_col(width = 0.5) +
+  geom_text(aes(label = paste0(attack_rate, "\n(cov. ", coverage, "%)")),
+            vjust = -0.3, size = 5.5, lineheight = 0.9) +
+  scale_fill_manual(values = c("FALSE" = "steelblue", "TRUE" = "red"), guide = "none") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(title = "Attack rate (per 100,000) and vaccine coverage by age group, Province X, 1 January – 30 June 2026",
+       x = "Age group (years)", y = "Attack rate per 100,000") +
+  theme_minimal(base_size = 12)
+
+plot3
+
+ggsave("attack_rate_age.png", plot3, width = 10, height = 8, dpi = 150, bg = "white")
+```
+# Does vaccination in different regions vary per age group and affects attack rate?
+```{r}
+cases_region_age <- outbreak %>% count(region,age_group, name = "cases")
+
+pop_region_age <- coverage %>% group_by(region, age_group) %>%  summarise(population = sum(population_2025),
+                                         vaccinated = sum(n_vaccinated))
+pop_reg_age_table <- pop_region_age %>%  left_join(cases_region_age, by = c("region","age_group"))
+
+pop_reg_age_table <- pop_reg_age_table %>%
+  mutate(attack_rate  = round(cases / population * 100000, 1),
+         coverage     = round(vaccinated / population * 100, 1),
+         unvaccinated = population - vaccinated,
+         pct_cases    = round(cases / sum(cases) * 100, 1))
+```
+
+# Plotting this result
+```{r}
+plot4 <- ggplot(pop_reg_age_table, aes(x = age_group, y = region, fill = coverage)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = paste0(coverage, "%\n", cases, " cases"))) +
+  scale_fill_gradient(low = "red", high = "lightyellow") +
+  labs(title = "Vaccine coverage and number of cases by region and age group",
+     subtitle = "Province X: coverage at end of 2025; cases reported 1 January – 30 June 2026",
+       x = "Age group", y = "Region", fill = "Coverage (%)") +
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, size = 11),
+        axis.text.y = element_text(angle = 90, vjust = 0.5, size = 11),
+        plot.title    = element_text(size = 22, face = "bold"),
+        plot.subtitle = element_text(size = 16),
+        legend.text   = element_text(size = 14))
+plot4
+ggsave("region group.png", plot4, width = 10, height = 8, dpi = 150, bg = "white")
+```
+
+
+# Checking if source of exposure explains the outbreak
+```{r}
+# Describing the clusters (exposure settings)
+clusters <- outbreak %>%
+  filter(!is.na(exposure_setting)) %>%
+  group_by(exposure_setting) %>%
+  summarise(cases        = n(),
+            first_report = min(as.Date(report_date)),
+            last_report  = max(as.Date(report_date)),
+            min_age      = min(age),
+            max_age      = max(age),
+            median_age   = median(age),
+            regions      = paste(sort(unique(region)), collapse = ", "))
+
+clusters
+
+# How many cases in each region, per cluster?
+outbreak %>%
+  filter(!is.na(exposure_setting)) %>%
+  count(exposure_setting, region)
+
+# Locally acquired cases with no setting recorded
+outbreak %>%
+  filter(acquisition == "locally acquired", is.na(exposure_setting)) %>%
+  nrow()
+```
